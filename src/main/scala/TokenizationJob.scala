@@ -7,6 +7,7 @@ import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
 import com.knuddels.jtokkit.Encodings
 import com.knuddels.jtokkit.api.{IntArrayList, ModelType}
 import com.typesafe.config.ConfigFactory
+import org.apache.log4j.Logger
 
 import scala.jdk.CollectionConverters.*
 
@@ -25,12 +26,17 @@ import scala.jdk.CollectionConverters.*
  * 5. Frequency Counting: Aggregates token frequencies, useful for further analysis.
  */
 object TokenizationJob {
+  private val logger = Logger.getLogger(this.getClass)
+
   // Load configuration from application.conf file
   private val config = ConfigFactory.load()
   // Retrieve specific configuration values
   private val modelTypeString = config.getString("tokenization.model-type")
   private val jobName = config.getString("tokenization.job-name")
   private val preprocessingRegex = config.getString("tokenization.preprocessing-regex")
+
+  logger.info(s"TokenizationJob initialized with model type: $modelTypeString, job name: $jobName")
+  logger.debug(s"Preprocessing regex: $preprocessingRegex")
 
   /**
    * Mapper class for the tokenization job.
@@ -44,8 +50,11 @@ object TokenizationJob {
    *   - Value: Count (always 1 in this case)
    */
   private class TokenizationMapper extends Mapper[LongWritable, Text, Text, IntWritable] {
+    private val logger = Logger.getLogger(this.getClass)
+
     // Lazy initialization of the encoding to ensure it's only created when needed
     private lazy val encoding = {
+      logger.info("Initializing encoding model")
       val registry = Encodings.newDefaultEncodingRegistry()
       registry.getEncodingForModel(ModelType.valueOf(modelTypeString))
     }
@@ -64,10 +73,13 @@ object TokenizationJob {
      * @return The preprocessed text
      */
     private def preprocess(text: String): String = {
-      text.toLowerCase
+      logger.debug(s"Preprocessing text: ${text.take(100)}...")
+      val result = text.toLowerCase
         .replaceAll(preprocessingRegex, "") // Remove all characters except lowercase letters, numbers, and spaces
         .split("\\s+") // Split by whitespace
         .mkString(" ") // Join back with single spaces
+      logger.debug(s"Preprocessed text: ${result.take(100)}...")
+      result
     }
 
     /**
@@ -79,16 +91,19 @@ object TokenizationJob {
      * - Emitting counts of 1 allows the reducer to aggregate frequencies.
      */
     override def map(key: LongWritable, value: Text, context: Mapper[LongWritable, Text, Text, IntWritable]#Context): Unit = {
+      logger.debug(s"Processing input line: ${value.toString.take(100)}...")
       val text = preprocess(value.toString)
       val words = text.split("\\s+") // Split by whitespace
 
+      logger.debug(s"Tokenizing ${words.length} words")
       words.foreach { word =>
         val encodedTokens = encoding.encode(word)
         encodedTokens.toArray.foreach { token =>
           val tokenList = new IntArrayList(1)
           tokenList.add(token)
-          val word = encoding.decode(tokenList)
-          context.write(new Text(s"$word\t$token"), one)
+          val decodedWord = encoding.decode(tokenList)
+          context.write(new Text(s"$decodedWord\t$token"), one)
+          logger.trace(s"Emitted: $decodedWord\t$token\t1")
         }
       }
     }
@@ -110,10 +125,14 @@ object TokenizationJob {
    * - Output format is designed for easy parsing in subsequent pipeline stages.
    */
   private class TokenizationReducer extends Reducer[Text, IntWritable, Text, Text] {
+    private val logger = Logger.getLogger(this.getClass)
+
     override def reduce(key: Text, values: java.lang.Iterable[IntWritable], context: Reducer[Text, IntWritable, Text, Text]#Context): Unit = {
       val sum = values.asScala.map(_.get).sum
       val Array(word, token) = key.toString.split("\t")
-      context.write(null, new Text(s"$word\t$token\t$sum"))
+      val output = s"$word\t$token\t$sum"
+      context.write(null, new Text(output))
+      logger.debug(s"Reduced: $output")
     }
   }
 
@@ -131,6 +150,8 @@ object TokenizationJob {
    * - Non-zero exit on failure allows for error detection in the overall pipeline.
    */
   def runJob(conf: Configuration, input: Path, output: Path): Unit = {
+    logger.info(s"Starting tokenization job. Input: $input, Output: $output")
+
     val job = Job.getInstance(conf, jobName)
     job.setJarByClass(this.getClass)
     job.setMapperClass(classOf[TokenizationMapper])
@@ -143,8 +164,17 @@ object TokenizationJob {
     // Delete output path if it exists
     val fs = FileSystem.get(conf)
     if (fs.exists(output)) {
+      logger.warn(s"Output path $output already exists. Deleting.")
       fs.delete(output, true)
     }
-    if (!job.waitForCompletion(true)) System.exit(1)
+
+    logger.info("Submitting tokenization job")
+    val success = job.waitForCompletion(true)
+    if (success) {
+      logger.info("Tokenization job completed successfully")
+    } else {
+      logger.error("Tokenization job failed")
+      System.exit(1)
+    }
   }
 }

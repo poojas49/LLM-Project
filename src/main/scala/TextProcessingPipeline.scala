@@ -2,9 +2,10 @@ import com.typesafe.config.ConfigFactory
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
+import org.apache.log4j.Logger
 
 import scala.util.{Failure, Success, Try}
-import scala.jdk.CollectionConverters._
+import scala.jdk.CollectionConverters.*
 
 /**
  * TextProcessingPipeline object handles the execution of a series of Hadoop jobs
@@ -36,6 +37,7 @@ import scala.jdk.CollectionConverters._
  *    Output: YAML-formatted statistics for each token
  */
 object TextProcessingPipeline {
+  private val logger = Logger.getLogger(this.getClass)
   /**
    * Entry point of the application. Parses command-line arguments and initiates
    * the file processing.
@@ -47,10 +49,13 @@ object TextProcessingPipeline {
    * @param args Command-line arguments: input path and output base path
    */
   def main(args: Array[String]): Unit = {
+    logger.info("Starting TextProcessingPipeline")
     args.toList match {
       case inputPath :: outputBasePath :: Nil =>
+        logger.info(s"Input path: $inputPath, Output base path: $outputBasePath")
         processFiles(new Path(inputPath), new Path(outputBasePath))
       case _ =>
+        logger.error("Invalid arguments provided")
         System.err.println("Usage: TextProcessingPipeline <input path> <output path>")
         System.exit(-1)
     }
@@ -69,8 +74,10 @@ object TextProcessingPipeline {
    * @param outputBasePath Base output path for all jobs in the pipeline
    */
   def processFiles(inputPath: Path, outputBasePath: Path): Unit = {
+    logger.info(s"Processing files. Input: $inputPath, Output base: $outputBasePath")
     val result = Try(ConfigFactory.load())
       .flatMap { config =>
+        logger.debug("Configuration loaded successfully")
         for {
           conf <- configureHadoop(config)
           output <- runPipeline(config, conf, inputPath, outputBasePath)
@@ -79,8 +86,11 @@ object TextProcessingPipeline {
 
     // Handle the result of the pipeline execution
     result match {
-      case Success(output) => println(s"Pipeline completed. Final output: $output")
+      case Success(output) =>
+        logger.info(s"Pipeline completed successfully. Final output: $output")
+        println(s"Pipeline completed. Final output: $output")
       case Failure(exception) =>
+        logger.error(s"Pipeline failed: ${exception.getMessage}", exception)
         System.err.println(s"Pipeline failed: ${exception.getMessage}")
         exception.printStackTrace()
     }
@@ -99,11 +109,13 @@ object TextProcessingPipeline {
    * @return A Try[Configuration] with the Hadoop configuration
    */
   def configureHadoop(config: com.typesafe.config.Config): Try[Configuration] = Try {
+    logger.info("Configuring Hadoop settings")
     val conf = new Configuration()
     val dataShardSizeInMB = config.getLong("hadoop.split.size.mb")
     val numReducers = config.getInt("hadoop.num.reducers")
     conf.setLong(FileInputFormat.SPLIT_MAXSIZE, dataShardSizeInMB * 1024 * 1024)
     conf.setInt("mapreduce.job.reduces", numReducers)
+    logger.debug(s"Hadoop configured with shard size: $dataShardSizeInMB MB, reducers: $numReducers")
     conf
   }
 
@@ -127,11 +139,14 @@ object TextProcessingPipeline {
    * @return A Try[Path] with the final output path (YAML-formatted statistics)
    */
   def runPipeline(config: com.typesafe.config.Config, conf: Configuration, inputPath: Path, outputBasePath: Path): Try[Path] = {
+    logger.info("Starting pipeline execution")
     // Load job configurations from the config file
     val jobsConfig = config.getConfigList("pipeline.jobs").asScala.toList
+    logger.debug(s"Loaded ${jobsConfig.size} job configurations")
     val jobOutputs = jobsConfig.map { jobConfig =>
       val jobName = jobConfig.getString("name")
       val jobClass = jobConfig.getString("class")
+      logger.debug(s"Preparing job: $jobName, Class: $jobClass")
       // Use reflection to get the runJob method of each job class
       (jobName, Class.forName(jobClass).getMethod("runJob", classOf[Configuration], classOf[Path], classOf[Path]))
     }
@@ -141,6 +156,7 @@ object TextProcessingPipeline {
       case (prevOutputTry, (jobName, runJobMethod)) =>
         prevOutputTry.flatMap { prevOutput =>
           val output = new Path(outputBasePath, jobName)
+          logger.info(s"Executing job: $jobName, Input: $prevOutput, Output: $output")
           // Invoke the runJob method and return the output path on success
           Try(runJobMethod.invoke(null, conf, prevOutput, output)).map(_ => output)
         }
@@ -153,6 +169,7 @@ object TextProcessingPipeline {
       val finalJobConfig = config.getConfig("pipeline.final-job")
       val finalOutput = new Path(outputBasePath, finalJobConfig.getString("name"))
       conf.setInt("mapreduce.job.reduces", finalJobConfig.getInt("num.reducers"))
+      logger.info(s"Running final statistics collation job. Output: $finalOutput")
       Try(StatisticsCollaterJob.runJob(conf, tokenizationOutput, semanticSimilarityOutput, finalOutput))
         .map(_ => finalOutput)
     }

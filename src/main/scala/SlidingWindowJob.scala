@@ -38,6 +38,9 @@ object SlidingWindowJob {
   private val inputSplitDelimiter = config.getString("sliding-window.input-split-delimiter")
   private val tokenIndex = config.getInt("sliding-window.token-index")
 
+  logger.info(s"SlidingWindowJob initialized with window size: $windowSize, job name: $jobName")
+  logger.debug(s"Input split delimiter: $inputSplitDelimiter, Token index: $tokenIndex")
+
   /**
    * Mapper class for the sliding window job.
    * It extracts tokens from input lines and emits them for further processing.
@@ -54,21 +57,33 @@ object SlidingWindowJob {
    * - Extracts only the token, discarding word and frequency, as context is built in the reducer.
    */
   private class SlidingWindowMapper extends Mapper[LongWritable, Text, Text, Text] {
+    private val mapperLogger = Logger.getLogger(this.getClass)
+
     override def map(key: LongWritable, value: Text, context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
       val inputLine = value.toString
-      logger.info(s"Processing input line: $inputLine")
+      mapperLogger.debug(s"Processing input line: $inputLine")
 
       val parts = inputLine.split(inputSplitDelimiter)
       if (parts.length > tokenIndex) {
         val token = parts(tokenIndex)
-        logger.info(s"Extracted token: $token")
+        mapperLogger.debug(s"Extracted token: $token")
         // Emit all tokens with the same key "data" to ensure they go to the same reducer
         context.write(new Text("data"), new Text(token))
+        mapperLogger.trace(s"Emitted: data, $token")
       } else {
-        logger.warn(s"Skipping input line due to insufficient parts: $inputLine")
+        mapperLogger.warn(s"Skipping input line due to insufficient parts: $inputLine")
       }
     }
+
+    override def setup(context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
+      mapperLogger.info("SlidingWindowMapper setup completed")
+    }
+
+    override def cleanup(context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
+      mapperLogger.info("SlidingWindowMapper cleanup completed")
+    }
   }
+
 
   /**
    * Reducer class for the sliding window job.
@@ -88,9 +103,12 @@ object SlidingWindowJob {
    * - Index in key maintains order and allows for reconstruction of original sequence if needed.
    */
   private class SlidingWindowReducer extends Reducer[Text, Text, Text, Text] {
+    private val reducerLogger = Logger.getLogger(this.getClass)
+
     override def reduce(key: Text, values: java.lang.Iterable[Text], context: Reducer[Text, Text, Text, Text]#Context): Unit = {
       val tokens = values.asScala.map(_.toString).toArray
-      logger.info(s"Reducer received ${tokens.length} tokens")
+      reducerLogger.info(s"Reducer received ${tokens.length} tokens")
+      reducerLogger.debug(s"First few tokens: ${tokens.take(5).mkString(", ")}")
 
       // Process tokens using a sliding window approach
       tokens.sliding(windowSize + 1).zipWithIndex.foreach { case (window, idx) =>
@@ -98,14 +116,24 @@ object SlidingWindowJob {
           val (inputWindow, label) = window.splitAt(windowSize)
           val inputStr = inputWindow.mkString(",")
           val labelStr = label.head
-          logger.info(s"Emitting window $idx: input=$inputStr, label=$labelStr")
+          reducerLogger.debug(s"Processing window $idx: input=$inputStr, label=$labelStr")
           // Emit both the input window and its corresponding label
           context.write(new Text(s"input_$idx"), new Text(inputStr))
           context.write(new Text(s"label_$idx"), new Text(labelStr))
+          reducerLogger.trace(s"Emitted: input_$idx, $inputStr")
+          reducerLogger.trace(s"Emitted: label_$idx, $labelStr")
         } else {
-          logger.warn(s"Skipping window $idx due to insufficient length: ${window.mkString(",")}")
+          reducerLogger.warn(s"Skipping window $idx due to insufficient length: ${window.mkString(",")}")
         }
       }
+    }
+
+    override def setup(context: Reducer[Text, Text, Text, Text]#Context): Unit = {
+      reducerLogger.info("SlidingWindowReducer setup completed")
+    }
+
+    override def cleanup(context: Reducer[Text, Text, Text, Text]#Context): Unit = {
+      reducerLogger.info("SlidingWindowReducer cleanup completed")
     }
   }
 
@@ -124,6 +152,8 @@ object SlidingWindowJob {
    * - Non-zero exit on failure allows for error detection in the overall pipeline.
    */
   def runJob(conf: Configuration, input: Path, output: Path): Unit = {
+    logger.info(s"Initializing Sliding Window job with input: $input and output: $output")
+
     val job = Job.getInstance(conf, jobName)
     job.setJarByClass(this.getClass)
     job.setMapperClass(classOf[SlidingWindowMapper])
@@ -135,17 +165,22 @@ object SlidingWindowJob {
     FileInputFormat.addInputPath(job, input)
     FileOutputFormat.setOutputPath(job, output)
 
+    logger.debug("Job configuration completed")
+
     // Delete output path if it exists
     val fs = FileSystem.get(conf)
     if (fs.exists(output)) {
+      logger.warn(s"Output path $output already exists. Deleting.")
       fs.delete(output, true)
     }
 
-    logger.info(s"Starting Sliding Window job with input: $input and output: $output")
-    if (!job.waitForCompletion(true)) {
+    logger.info("Submitting Sliding Window job")
+    val success = job.waitForCompletion(true)
+    if (success) {
+      logger.info("Sliding Window job completed successfully")
+    } else {
       logger.error("Sliding Window job failed")
       System.exit(1)
     }
-    logger.info("Sliding Window job completed successfully")
   }
 }

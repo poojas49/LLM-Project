@@ -6,6 +6,7 @@ import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
 import org.apache.hadoop.mapreduce.{Job, Mapper, Reducer}
 import org.yaml.snakeyaml.Yaml
 import com.typesafe.config.ConfigFactory
+import org.apache.log4j.Logger
 
 import java.io.StringWriter
 import scala.jdk.CollectionConverters.*
@@ -34,8 +35,12 @@ import scala.jdk.CollectionConverters.*
  * 5. Scalability: Leverages Hadoop's distributed processing capabilities for large-scale data collation.
  */
 object StatisticsCollaterJob {
+  private val logger = Logger.getLogger(this.getClass)
+
   // Load configuration values
   private val config = ConfigFactory.load()
+  logger.info("Loading configuration for StatisticsCollaterJob")
+
   private val jobName = config.getString("statistics-collater.job-name")
   private val inputSplitDelimiter = config.getString("statistics-collater.input-split-delimiter")
   private val similarityPairDelimiter = config.getString("statistics-collater.similarity-pair-delimiter")
@@ -47,6 +52,14 @@ object StatisticsCollaterJob {
   private val intTokenKey = config.getString("yaml-output.int-token-key")
   private val frequencyKey = config.getString("yaml-output.frequency-key")
   private val similarTokensKey = config.getString("yaml-output.similar-tokens-key")
+
+  logger.debug(s"Job Name: $jobName")
+  logger.debug(s"Input Split Delimiter: $inputSplitDelimiter")
+  logger.debug(s"Similarity Pair Delimiter: $similarityPairDelimiter")
+  logger.debug(s"Similarity Score Delimiter: $similarityScoreDelimiter")
+  logger.debug(s"NA Value: $naValue")
+  logger.debug(s"YAML Output Keys - word: $wordKey, intToken: $intTokenKey, frequency: $frequencyKey, similarTokens: $similarTokensKey")
+
 
   /**
    * Mapper class for processing tokenization data.
@@ -65,14 +78,29 @@ object StatisticsCollaterJob {
    * 3. Minimal Processing: Keeps mapper light, pushing main aggregation to the reducer.
    */
   class TokenizationMapper extends Mapper[LongWritable, Text, Text, Text] {
+    private val logger = Logger.getLogger(this.getClass)
+
+    override def setup(context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
+      logger.info("TokenizationMapper setup started.")
+    }
+
     override def map(key: LongWritable, value: Text, context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
-      val parts = value.toString.split(inputSplitDelimiter)
+      val line = value.toString
+      logger.debug(s"TokenizationMapper received line: $line")
+      val parts = line.split(inputSplitDelimiter)
       if (parts.length == 3) {
         val word = parts(0)
         val token = parts(1)
         val frequency = parts(2)
+        logger.debug(s"Parsed Tokenization Data - Word: $word, Token: $token, Frequency: $frequency")
         context.write(new Text(token), new Text(s"$word$inputSplitDelimiter$frequency"))
+      } else {
+        logger.error(s"Invalid tokenization input format: $line")
       }
+    }
+
+    override def cleanup(context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
+      logger.info("TokenizationMapper cleanup completed.")
     }
   }
 
@@ -93,14 +121,29 @@ object StatisticsCollaterJob {
    * 3. Preservation of Data: Keeps similarity data intact for processing in the reducer.
    */
   class SimilarityMapper extends Mapper[LongWritable, Text, Text, Text] {
+    private val logger = Logger.getLogger(this.getClass)
+
+    override def setup(context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
+      logger.info("SimilarityMapper setup started.")
+    }
+
     override def map(key: LongWritable, value: Text, context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
-      val parts = value.toString.split(inputSplitDelimiter)
+      val line = value.toString
+      logger.debug(s"SimilarityMapper received line: $line")
+      val parts = line.split(inputSplitDelimiter)
       if (parts.length == 2) {
         val token = parts(0)
         val similarities = parts(1)
+        logger.debug(s"Parsed Similarity Data - Token: $token, Similarities: $similarities")
         val similarityPairs = similarities.split(similarityPairDelimiter).map(_.trim)
         context.write(new Text(token), new Text(similarityPairs.mkString(similarityPairDelimiter)))
+      } else {
+        logger.error(s"Invalid similarity input format: $line")
       }
+    }
+
+    override def cleanup(context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
+      logger.info("SimilarityMapper cleanup completed.")
     }
   }
 
@@ -120,41 +163,74 @@ object StatisticsCollaterJob {
    * 3. Structured Output: Generates a YAML-formatted output for easy parsing and readability.
    * 4. Null Key Output: Allows for sequential, unkeyed output of YAML data.
    */
-  class StatisticsReducer extends Reducer[Text, Text, Text, Text] {
+  private class StatisticsReducer extends Reducer[Text, Text, Text, Text] {
+    private val logger = Logger.getLogger(classOf[StatisticsReducer])
+
+    override def setup(context: Reducer[Text, Text, Text, Text]#Context): Unit = {
+      logger.info("StatisticsReducer setup started.")
+    }
+
     override def reduce(key: Text, values: java.lang.Iterable[Text], context: Reducer[Text, Text, Text, Text]#Context): Unit = {
       val token = key.toString
+      logger.debug(s"Reducer processing token: $token")
 
-      // Aggregate data from both mappers
-      val (word, frequency, similarities) = values.asScala.foldLeft(("", 0L, List.empty[String])) {
-        case ((word, frequency, similarities), value) =>
-          val parts = value.toString.split(inputSplitDelimiter)
-          if (parts.length == 2) {
-            // Processing tokenization data
-            (parts(0), parts(1).toLong, similarities)
-          } else {
-            // Processing similarity data
-            val similarityPairs = value.toString.split(similarityPairDelimiter).map { pair =>
-              val Array(similarToken, score) = pair.split(s"\\$similarityScoreDelimiter")
-              s"$similarToken"
-            }.toList
-            (word, frequency, similarityPairs)
-          }
+      try {
+        // Aggregate data from both mappers
+        val (word, frequency, similarities) = values.asScala.foldLeft(("", 0L, List.empty[String])) {
+          case ((wordAcc, freqAcc, simAcc), value) =>
+            val parts = value.toString.split(inputSplitDelimiter)
+            if (parts.length == 2) {
+              // Processing tokenization data
+              val parsedWord = parts(0)
+              val parsedFrequency = parts(1).toLong
+              logger.debug(s"Accumulating Tokenization Data - Word: $parsedWord, Frequency: $parsedFrequency")
+              (parsedWord, parsedFrequency, simAcc)
+            } else {
+              // Processing similarity data
+              val similarityPairs = value.toString.split(similarityPairDelimiter).map { pair =>
+                val tokens = pair.split(s"\\$similarityScoreDelimiter")
+                if (tokens.length == 2) {
+                  val similarToken = tokens(0)
+                  val score = tokens(1)
+                  logger.debug(s"Parsed Similarity Pair - Similar Token: $similarToken, Score: $score")
+                  similarToken
+                } else {
+                  logger.error(s"Invalid similarity pair format: $pair")
+                  naValue
+                }
+              }.toList
+              (wordAcc, freqAcc, simAcc ++ similarityPairs)
+            }
+        }
+
+        logger.debug(s"Aggregated Data - Word: $word, Frequency: $frequency, Similarities: ${similarities.mkString(", ")}")
+
+        // Prepare data for YAML output
+        val data = Map(
+          wordKey -> (if (word.nonEmpty) word else naValue),
+          intTokenKey -> token,
+          frequencyKey -> frequency,
+          similarTokensKey -> (if (similarities.isEmpty) naValue else similarities.asJava)
+        )
+
+        logger.debug(s"Data for YAML - $data")
+
+        // Generate YAML output
+        val yaml = new Yaml()
+        val writer = new StringWriter()
+        yaml.dump(data.asJava, writer)
+        val yamlOutput = writer.toString
+        logger.debug(s"Generated YAML Output: $yamlOutput")
+
+        context.write(null, new Text(yamlOutput))
+      } catch {
+        case ex: Exception =>
+          logger.error(s"Error processing token: $token", ex)
       }
+    }
 
-      // Prepare data for YAML output
-      val data = Map(
-        wordKey -> word,
-        intTokenKey -> token,
-        frequencyKey -> frequency,
-        similarTokensKey -> (if (similarities.isEmpty) naValue else similarities.asJava)
-      )
-
-      // Generate YAML output
-      val yaml = new Yaml()
-      val writer = new StringWriter()
-      yaml.dump(data.asJava, writer)
-
-      context.write(null, new Text(writer.toString))
+    override def cleanup(context: Reducer[Text, Text, Text, Text]#Context): Unit = {
+      logger.info("StatisticsReducer cleanup completed.")
     }
   }
 
@@ -174,6 +250,8 @@ object StatisticsCollaterJob {
    * 4. Single Reducer: Uses a single reducer to ensure all data for each token is processed together.
    */
   def runJob(conf: Configuration, tokenizationInput: Path, similarityInput: Path, output: Path): Unit = {
+    logger.info("Starting StatisticsCollaterJob.")
+
     val job = Job.getInstance(conf, jobName)
     job.setJarByClass(this.getClass)
     job.setReducerClass(classOf[StatisticsReducer])
@@ -181,18 +259,37 @@ object StatisticsCollaterJob {
     job.setOutputValueClass(classOf[Text])
 
     // Set up multiple input paths with different mappers
+    logger.info(s"Adding tokenization input path: $tokenizationInput with TokenizationMapper.")
     MultipleInputs.addInputPath(job, tokenizationInput, classOf[TextInputFormat], classOf[TokenizationMapper])
+
+    logger.info(s"Adding similarity input path: $similarityInput with SimilarityMapper.")
     MultipleInputs.addInputPath(job, similarityInput, classOf[TextInputFormat], classOf[SimilarityMapper])
 
     FileOutputFormat.setOutputPath(job, output)
+    logger.info(s"Output path set to: $output")
 
     // Delete output path if it exists
-    val fs = FileSystem.get(conf)
-    if (fs.exists(output)) {
-      fs.delete(output, true)
+    try {
+      val fs = FileSystem.get(conf)
+      if (fs.exists(output)) {
+        logger.warn(s"Output path $output already exists. Deleting it.")
+        fs.delete(output, true)
+        logger.info(s"Deleted existing output path: $output")
+      }
+    } catch {
+      case ex: Exception =>
+        logger.error(s"Error accessing or deleting output path: $output", ex)
+        System.exit(1)
     }
 
     // Run the job and exit with error if it fails
-    if (!job.waitForCompletion(true)) System.exit(1)
+    logger.info("Submitting StatisticsCollaterJob the job to Hadoop cluster.")
+    val jobSuccess = job.waitForCompletion(true)
+    if (jobSuccess) {
+      logger.info("StatisticsCollaterJob completed successfully.")
+    } else {
+      logger.error("StatisticsCollaterJob failed.")
+      System.exit(1)
+    }
   }
 }

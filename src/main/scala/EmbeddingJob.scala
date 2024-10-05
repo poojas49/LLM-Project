@@ -1,6 +1,6 @@
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
-import org.apache.hadoop.mapreduce.Job
+import org.apache.hadoop.mapreduce.{Job, Mapper, Reducer}
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
 import org.apache.log4j.Logger
@@ -11,9 +11,12 @@ import org.nd4j.linalg.learning.config.Adam
 import org.nd4j.linalg.lossfunctions.LossFunctions
 import org.nd4j.linalg.api.ndarray.INDArray
 import com.typesafe.config.ConfigFactory
+import org.apache.hadoop.io.{LongWritable, Text}
+import org.deeplearning4j.nn.multilayer.MultiLayerNetwork
+import org.nd4j.linalg.factory.Nd4j
 
-import scala.jdk.CollectionConverters._
-import scala.util.{Try, Success, Failure}
+import scala.jdk.CollectionConverters.*
+import scala.util.{Failure, Success, Try}
 
 /**
  * EmbeddingJob object implements a Hadoop MapReduce job that generates embeddings for tokens
@@ -40,10 +43,8 @@ object EmbeddingJob {
   private val jobName = config.getString("embedding-job.job-name")
   private val inputSplitDelimiter = config.getString("embedding-job.input-split-delimiter")
 
-  import org.apache.hadoop.io.{LongWritable, Text}
-  import org.apache.hadoop.mapreduce.{Mapper, Reducer}
-  import org.deeplearning4j.nn.multilayer.MultiLayerNetwork
-  import org.nd4j.linalg.factory.Nd4j
+  logger.info(s"EmbeddingJob initialized with window size: $windowSize, embedding size: $embeddingSize, job name: $jobName")
+  logger.debug(s"Input split delimiter: $inputSplitDelimiter")
 
   /**
    * Mapper class for the embedding job.
@@ -61,15 +62,26 @@ object EmbeddingJob {
    * 2. Error Logging: Logs malformed input for debugging purposes.
    */
   class EmbeddingMapper extends Mapper[LongWritable, Text, Text, Text] {
+    private val mapperLogger = Logger.getLogger(this.getClass)
+
+    override def setup(context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
+      mapperLogger.info("EmbeddingMapper setup started")
+    }
+
     override def map(key: LongWritable, value: Text, context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
       val parts = value.toString.split(inputSplitDelimiter)
       parts match {
         case Array(keyType, tokens) =>
           val newKey = keyType.split("_")(0)
           context.write(new Text(newKey), new Text(tokens))
+          mapperLogger.debug(s"Mapped key: $newKey, tokens: ${tokens.take(50)}...")
         case _ =>
-          logger.warn(s"Malformed input: ${value.toString}")
+          mapperLogger.warn(s"Malformed input: ${value.toString}")
       }
+    }
+
+    override def cleanup(context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
+      mapperLogger.info("EmbeddingMapper cleanup completed")
     }
   }
 
@@ -89,11 +101,21 @@ object EmbeddingJob {
    * 2. Functional Approach: Uses immutable data structures and pure functions for token processing.
    * 3. Averaging: Computes average embeddings for tokens that appear in multiple windows.
    */
-  class EmbeddingReducer extends Reducer[Text, Text, Text, Text] {
+  private class EmbeddingReducer extends Reducer[Text, Text, Text, Text] {
+    private val reducerLogger = Logger.getLogger(this.getClass)
     private lazy val model: MultiLayerNetwork = createModel()
 
+    override def setup(context: Reducer[Text, Text, Text, Text]#Context): Unit = {
+      reducerLogger.info("EmbeddingReducer setup started")
+      // Initialize the model in setup
+      model
+      reducerLogger.info("Neural network model initialized")
+    }
+
     override def reduce(key: Text, values: java.lang.Iterable[Text], context: Reducer[Text, Text, Text, Text]#Context): Unit = {
+      reducerLogger.info(s"Processing key: ${key.toString}")
       val allTokens = values.asScala.flatMap(_.toString.split(",").map(_.toInt)).toList
+      reducerLogger.debug(s"Received ${allTokens.size} tokens for processing")
 
       val tokenEmbeddings = processTokens(allTokens)
       writeEmbeddings(tokenEmbeddings, context)
@@ -111,16 +133,22 @@ object EmbeddingJob {
      * 3. Immutability: Uses immutable Map and functional fold for thread-safety.
      */
     private def processTokens(tokens: List[Int]): Map[Int, List[Array[Float]]] = {
-      tokens.sliding(windowSize).foldLeft(Map.empty[Int, List[Array[Float]]]) { (acc, window) =>
+      reducerLogger.info(s"Processing ${tokens.size} tokens")
+      tokens.sliding(windowSize).zipWithIndex.foldLeft(Map.empty[Int, List[Array[Float]]]) { case (acc, (window, idx)) =>
         if (window.length == windowSize) {
           val inputFeature = createInputFeature(window)
           model.fit(inputFeature, inputFeature)
+          reducerLogger.debug(s"Fitted model for window $idx: ${window.mkString(",")}")
 
           window.zipWithIndex.foldLeft(acc) { case (innerAcc, (token, index)) =>
             val embedding = model.getLayer(0).getParam("W").getColumn(index).toFloatVector
+            reducerLogger.trace(s"Generated embedding for token $token")
             innerAcc.updated(token, embedding :: innerAcc.getOrElse(token, List.empty))
           }
-        } else acc
+        } else {
+          reducerLogger.warn(s"Skipping window $idx due to insufficient length: ${window.mkString(",")}")
+          acc
+        }
       }
     }
 
@@ -135,10 +163,12 @@ object EmbeddingJob {
      * 2. Formatting: Converts embeddings to a string format for output.
      */
     private def writeEmbeddings(tokenEmbeddings: Map[Int, List[Array[Float]]], context: Reducer[Text, Text, Text, Text]#Context): Unit = {
+      reducerLogger.info(s"Writing embeddings for ${tokenEmbeddings.size} tokens")
       tokenEmbeddings.foreach { case (token, embeddings) =>
         val avgEmbedding = embeddings.transpose.map(v => v.sum / v.length)
         val embeddingStr = avgEmbedding.mkString("[", ", ", "]")
         context.write(new Text(token.toString), new Text(embeddingStr))
+        reducerLogger.debug(s"Wrote embedding for token $token")
       }
     }
 
@@ -153,6 +183,7 @@ object EmbeddingJob {
      * 3. Adam Optimizer: Efficient and widely used optimizer for neural networks.
      */
     private def createModel(): MultiLayerNetwork = {
+      reducerLogger.info("Creating neural network model")
       val conf = new NeuralNetConfiguration.Builder()
         .updater(new Adam())
         .list()
@@ -167,7 +198,7 @@ object EmbeddingJob {
 
       val network = new MultiLayerNetwork(conf)
       network.init()
-      logger.info("Model created and initialized")
+      reducerLogger.info("Neural network model created and initialized")
       network
     }
 
@@ -183,7 +214,13 @@ object EmbeddingJob {
      */
     private def createInputFeature(window: Seq[Int]): INDArray = {
       val floatArray = window.map(_.toFloat).toArray
-      Nd4j.create(floatArray).reshape(1, windowSize)
+      val feature = Nd4j.create(floatArray).reshape(1, windowSize)
+      reducerLogger.trace(s"Created input feature for window: ${window.mkString(",")}")
+      feature
+    }
+
+    override def cleanup(context: Reducer[Text, Text, Text, Text]#Context): Unit = {
+      reducerLogger.info("EmbeddingReducer cleanup completed")
     }
   }
 
@@ -201,6 +238,8 @@ object EmbeddingJob {
    * 3. Logging: Provides detailed logging for job start, completion, and failure.
    */
   def runJob(conf: Configuration, input: Path, output: Path): Try[Unit] = {
+    logger.info(s"Setting up Embedding job with input: $input and output: $output")
+
     val setupJob = Try(Job.getInstance(conf, jobName)).map { job =>
       job.setJarByClass(this.getClass)
       job.setMapperClass(classOf[EmbeddingMapper])
@@ -211,25 +250,34 @@ object EmbeddingJob {
       job.setOutputValueClass(classOf[Text])
       FileInputFormat.addInputPath(job, input)
       FileOutputFormat.setOutputPath(job, output)
+      logger.debug("Job configuration completed")
       job
     }
 
     val cleanupOutput = setupJob.flatMap(_ => Try(FileSystem.get(conf))).map { fs =>
-      if (fs.exists(output)) fs.delete(output, true)
+      if (fs.exists(output)) {
+        logger.warn(s"Output path $output already exists. Deleting.")
+        fs.delete(output, true)
+      }
     }
 
     val runAndComplete = cleanupOutput.flatMap { _ =>
       Try {
-        logger.info(s"Starting Embedding job with input: $input and output: $output")
+        logger.info(s"Starting Embedding job execution")
         setupJob.get.waitForCompletion(true)
       }.flatMap { completed =>
-        if (completed) Success(())
-        else Failure(new Exception("Embedding job failed"))
+        if (completed) {
+          logger.info("Embedding job completed successfully")
+          Success(())
+        } else {
+          logger.error("Embedding job failed")
+          Failure(new Exception("Embedding job failed"))
+        }
       }
     }
 
     runAndComplete.map { _ =>
-      logger.info("Embedding job completed successfully")
+      logger.info("Embedding job process finished")
     }
   }
 }

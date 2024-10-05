@@ -40,6 +40,9 @@ object SemanticSimilarityJob {
   private val topK = config.getInt("semantic-similarity.top-k")
   private val similarityFormat = config.getString("semantic-similarity.similarity-format")
 
+  logger.info(s"SemanticSimilarityJob initialized with job name: $jobName, topK: $topK")
+  logger.debug(s"Input split delimiter: $inputSplitDelimiter, Embedding delimiter: $embeddingDelimiter, Similarity format: $similarityFormat")
+
   /**
    * Mapper class for the semantic similarity job.
    * Extracts token-embedding pairs from input and emits them with a constant key.
@@ -56,14 +59,25 @@ object SemanticSimilarityJob {
    * 2. Single Reducer: Uses a constant key to ensure all data is processed together.
    * 3. Error Logging: Logs malformed input for debugging purposes.
    */
-  class SimilarityMapper extends Mapper[LongWritable, Text, Text, Text] {
+  private class SimilarityMapper extends Mapper[LongWritable, Text, Text, Text] {
+    private val mapperLogger = Logger.getLogger(this.getClass)
+
+    override def setup(context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
+      mapperLogger.info("SimilarityMapper setup started")
+    }
+
     override def map(key: LongWritable, value: Text, context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
       value.toString.split(inputSplitDelimiter) match {
         case Array(token, embedding) =>
           context.write(new Text("all"), new Text(s"$token$embeddingDelimiter$embedding"))
+          mapperLogger.debug(s"Mapped token: $token with embedding length: ${embedding.length}")
         case _ =>
-          logger.warn(s"Malformed input: ${value.toString}")
+          mapperLogger.warn(s"Malformed input: ${value.toString}")
       }
+    }
+
+    override def cleanup(context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
+      mapperLogger.info("SimilarityMapper cleanup completed")
     }
   }
 
@@ -83,11 +97,21 @@ object SemanticSimilarityJob {
    * 2. Functional Approach: Uses immutable data structures and pure functions for clarity and thread-safety.
    * 3. Modular Design: Splits the process into smaller, focused functions for better maintainability.
    */
-  class SimilarityReducer extends Reducer[Text, Text, Text, Text] {
+  private class SimilarityReducer extends Reducer[Text, Text, Text, Text] {
+    private val reducerLogger = Logger.getLogger(this.getClass)
+
+    override def setup(context: Reducer[Text, Text, Text, Text]#Context): Unit = {
+      reducerLogger.info("SimilarityReducer setup started")
+    }
+
     override def reduce(key: Text, values: java.lang.Iterable[Text], context: Reducer[Text, Text, Text, Text]#Context): Unit = {
+      reducerLogger.info("Starting similarity reduction")
       val embeddings = parseEmbeddings(values)
+      reducerLogger.info(s"Parsed ${embeddings.size} embeddings")
       val similarities = calculateSimilarities(embeddings)
+      reducerLogger.info(s"Calculated similarities for ${similarities.size} tokens")
       writeSimilarities(similarities, context)
+      reducerLogger.info("Completed similarity reduction")
     }
 
     /**
@@ -97,14 +121,20 @@ object SemanticSimilarityJob {
      * @return Map of tokens to their embeddings
      */
     private def parseEmbeddings(values: java.lang.Iterable[Text]): Map[String, Array[Float]] = {
-      values.asScala.foldLeft(Map.empty[String, Array[Float]]) { (acc, value) =>
+      reducerLogger.debug("Parsing embeddings")
+      val embeddings = values.asScala.foldLeft(Map.empty[String, Array[Float]]) { (acc, value) =>
         value.toString.split(s"\\$embeddingDelimiter") match {
           case Array(token, embeddingStr) =>
             val embedding = embeddingStr.stripPrefix("[").stripSuffix("]").split(",").map(_.trim.toFloat)
+            reducerLogger.trace(s"Parsed embedding for token: $token, length: ${embedding.length}")
             acc + (token -> embedding)
-          case _ => acc
+          case _ =>
+            reducerLogger.warn(s"Skipping malformed embedding: $value")
+            acc
         }
       }
+      reducerLogger.debug(s"Parsed ${embeddings.size} embeddings")
+      embeddings
     }
 
     /**
@@ -114,12 +144,17 @@ object SemanticSimilarityJob {
      * @return Map of tokens to their top-K similar tokens with similarity scores
      */
     private def calculateSimilarities(embeddings: Map[String, Array[Float]]): Map[String, Seq[(String, Double)]] = {
-      embeddings.map { case (token1, embedding1) =>
+      reducerLogger.debug("Calculating similarities")
+      val similarities = embeddings.map { case (token1, embedding1) =>
+        reducerLogger.trace(s"Calculating similarities for token: $token1")
         val tokenSimilarities = embeddings.filter(_._1 != token1).map { case (token2, embedding2) =>
           (token2, cosineSimilarity(embedding1, embedding2))
         }.toSeq.sortBy(-_._2).take(topK)
+        reducerLogger.trace(s"Found top $topK similarities for token: $token1")
         (token1, tokenSimilarities)
       }
+      reducerLogger.debug(s"Calculated similarities for ${similarities.size} tokens")
+      similarities
     }
 
     /**
@@ -129,12 +164,15 @@ object SemanticSimilarityJob {
      * @param context Reducer context for writing output
      */
     private def writeSimilarities(similarities: Map[String, Seq[(String, Double)]], context: Reducer[Text, Text, Text, Text]#Context): Unit = {
+      reducerLogger.debug("Writing similarities")
       similarities.foreach { case (token, similarTokens) =>
         val formattedSimilarities = similarTokens.map { case (similarToken, similarity) =>
           s"$similarToken(${similarity.formatted(similarityFormat)})"
         }.mkString(",")
         context.write(new Text(token), new Text(formattedSimilarities))
+        reducerLogger.trace(s"Wrote similarities for token: $token")
       }
+      reducerLogger.debug(s"Wrote similarities for ${similarities.size} tokens")
     }
 
     /**
@@ -156,6 +194,10 @@ object SemanticSimilarityJob {
       }
       dotProduct / (math.sqrt(mag1) * math.sqrt(mag2))
     }
+
+    override def cleanup(context: Reducer[Text, Text, Text, Text]#Context): Unit = {
+      reducerLogger.info("SimilarityReducer cleanup completed")
+    }
   }
 
   /**
@@ -172,6 +214,8 @@ object SemanticSimilarityJob {
    * 3. Logging: Provides detailed logging for job start, completion, and failure.
    */
   def runJob(conf: Configuration, input: Path, output: Path): Try[Unit] = {
+    logger.info(s"Setting up $jobName job with input: $input and output: $output")
+
     val setupJob = Try(Job.getInstance(conf, jobName)).map { job =>
       job.setJarByClass(this.getClass)
       job.setMapperClass(classOf[SimilarityMapper])
@@ -180,25 +224,34 @@ object SemanticSimilarityJob {
       job.setOutputValueClass(classOf[Text])
       FileInputFormat.addInputPath(job, input)
       FileOutputFormat.setOutputPath(job, output)
+      logger.debug("Job configuration completed")
       job
     }
 
     val cleanupOutput = setupJob.flatMap(_ => Try(FileSystem.get(conf))).map { fs =>
-      if (fs.exists(output)) fs.delete(output, true)
+      if (fs.exists(output)) {
+        logger.warn(s"Output path $output already exists. Deleting.")
+        fs.delete(output, true)
+      }
     }
 
     val runAndComplete = cleanupOutput.flatMap { _ =>
       Try {
-        logger.info(s"Starting $jobName job with input: $input and output: $output")
+        logger.info(s"Starting $jobName job execution")
         setupJob.get.waitForCompletion(true)
       }.flatMap { completed =>
-        if (completed) Success(())
-        else Failure(new Exception(s"$jobName job failed"))
+        if (completed) {
+          logger.info(s"$jobName job completed successfully")
+          Success(())
+        } else {
+          logger.error(s"$jobName job failed")
+          Failure(new Exception(s"$jobName job failed"))
+        }
       }
     }
 
     runAndComplete.map { _ =>
-      logger.info(s"$jobName job completed successfully")
+      logger.info(s"$jobName job process finished")
     }
   }
 }
