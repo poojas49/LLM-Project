@@ -4,6 +4,7 @@ import org.apache.hadoop.fs.Path
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
 
 import scala.util.{Failure, Success, Try}
+import scala.jdk.CollectionConverters._
 
 object TextProcessingPipeline {
   def main(args: Array[String]): Unit = {
@@ -18,19 +19,12 @@ object TextProcessingPipeline {
 
   def processFiles(inputPath: Path, outputBasePath: Path): Unit = {
     val result = Try(ConfigFactory.load())
-      .map { config =>
-        (
-          config.getLong("hadoop.split.size.mb"),
-          config.getInt("hadoop.num.reducers"),
-        )
+      .flatMap { config =>
+        for {
+          conf <- configureHadoop(config)
+          output <- runPipeline(config, conf, inputPath, outputBasePath)
+        } yield output
       }
-      .map { case (dataShardSizeInMB, numReducers) =>
-        val conf = new Configuration()
-        conf.setLong(FileInputFormat.SPLIT_MAXSIZE, dataShardSizeInMB * 1024 * 1024)
-        conf.setInt("mapreduce.job.reduces", numReducers)
-        conf
-      }
-      .flatMap(conf => runPipeline(conf, inputPath, outputBasePath))
 
     result match {
       case Success(output) => println(s"Pipeline completed. Final output: $output")
@@ -40,27 +34,37 @@ object TextProcessingPipeline {
     }
   }
 
-  def runPipeline(conf: Configuration, inputPath: Path, outputBasePath: Path): Try[Path] = {
-    val jobOutputs = List(
-      ("tokenization", TokenizationJob.runJob),
-      ("sliding_window", SlidingWindowJob.runJob),
-      ("embedding", EmbeddingJob.runJob),
-      ("semantic_similarity", SemanticSimilarityJob.runJob)
-    )
+  def configureHadoop(config: com.typesafe.config.Config): Try[Configuration] = Try {
+    val conf = new Configuration()
+    val dataShardSizeInMB = config.getLong("hadoop.split.size.mb")
+    val numReducers = config.getInt("hadoop.num.reducers")
+    conf.setLong(FileInputFormat.SPLIT_MAXSIZE, dataShardSizeInMB * 1024 * 1024)
+    conf.setInt("mapreduce.job.reduces", numReducers)
+    conf
+  }
+
+  def runPipeline(config: com.typesafe.config.Config, conf: Configuration, inputPath: Path, outputBasePath: Path): Try[Path] = {
+    val jobsConfig = config.getConfigList("pipeline.jobs").asScala.toList
+    val jobOutputs = jobsConfig.map { jobConfig =>
+      val jobName = jobConfig.getString("name")
+      val jobClass = jobConfig.getString("class")
+      (jobName, Class.forName(jobClass).getMethod("runJob", classOf[Configuration], classOf[Path], classOf[Path]))
+    }
 
     val pipelineResult = jobOutputs.foldLeft(Try(inputPath)) {
-      case (prevOutputTry, (jobName, runJob)) =>
+      case (prevOutputTry, (jobName, runJobMethod)) =>
         prevOutputTry.flatMap { prevOutput =>
           val output = new Path(outputBasePath, jobName)
-          Try(runJob(conf, prevOutput, output)).map(_ => output)
+          Try(runJobMethod.invoke(null, conf, prevOutput, output)).map(_ => output)
         }
     }
 
     pipelineResult.flatMap { _ =>
-      val tokenizationOutput = new Path(outputBasePath, "tokenization")
-      val semanticSimilarityOutput = new Path(outputBasePath, "semantic_similarity")
-      val finalOutput = new Path(outputBasePath, "statistics_collated")
-      conf.setInt("mapreduce.job.reduces", 1)
+      val tokenizationOutput = new Path(outputBasePath, jobsConfig.head.getString("name"))
+      val semanticSimilarityOutput = new Path(outputBasePath, jobsConfig.last.getString("name"))
+      val finalJobConfig = config.getConfig("pipeline.final-job")
+      val finalOutput = new Path(outputBasePath, finalJobConfig.getString("name"))
+      conf.setInt("mapreduce.job.reduces", finalJobConfig.getInt("num.reducers"))
       Try(StatisticsCollaterJob.runJob(conf, tokenizationOutput, semanticSimilarityOutput, finalOutput))
         .map(_ => finalOutput)
     }

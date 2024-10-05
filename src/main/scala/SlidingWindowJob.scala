@@ -5,33 +5,35 @@ import org.apache.hadoop.mapreduce.{Job, Mapper, Reducer}
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
 import org.apache.log4j.Logger
+import com.typesafe.config.ConfigFactory
 
 import scala.jdk.CollectionConverters.*
 
 object SlidingWindowJob {
   private val logger = Logger.getLogger(getClass)
+  private val config = ConfigFactory.load()
+  private val windowSize = config.getInt("sliding-window.window-size")
+  private val jobName = config.getString("sliding-window.job-name")
+  private val inputSplitDelimiter = config.getString("sliding-window.input-split-delimiter")
+  private val tokenIndex = config.getInt("sliding-window.token-index")
 
   private class SlidingWindowMapper extends Mapper[LongWritable, Text, Text, Text] {
-    private val windowSize = 4 // Adjust as needed
-
     override def map(key: LongWritable, value: Text, context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
       val inputLine = value.toString
       logger.info(s"Processing input line: $inputLine")
 
-      val parts = inputLine.split("\t")
-      if (parts.nonEmpty) {
-        val token = parts(1)
+      val parts = inputLine.split(inputSplitDelimiter)
+      if (parts.length > tokenIndex) {
+        val token = parts(tokenIndex)
         logger.info(s"Extracted token: $token")
         context.write(new Text("data"), new Text(token))
       } else {
-        logger.warn(s"Skipping empty input line")
+        logger.warn(s"Skipping input line due to insufficient parts: $inputLine")
       }
     }
   }
 
   private class SlidingWindowReducer extends Reducer[Text, Text, Text, Text] {
-    private val windowSize = 4 // Adjust as needed
-
     override def reduce(key: Text, values: java.lang.Iterable[Text], context: Reducer[Text, Text, Text, Text]#Context): Unit = {
       val tokens = values.asScala.map(_.toString).toArray
       logger.info(s"Reducer received ${tokens.length} tokens")
@@ -52,7 +54,7 @@ object SlidingWindowJob {
   }
 
   def runJob(conf: Configuration, input: Path, output: Path): Unit = {
-    val job = Job.getInstance(conf, "Sliding Window for Embedding")
+    val job = Job.getInstance(conf, jobName)
     job.setJarByClass(this.getClass)
     job.setMapperClass(classOf[SlidingWindowMapper])
     job.setReducerClass(classOf[SlidingWindowReducer])

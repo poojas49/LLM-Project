@@ -6,26 +6,32 @@ import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
 import com.knuddels.jtokkit.Encodings
 import com.knuddels.jtokkit.api.{IntArrayList, ModelType}
+import com.typesafe.config.ConfigFactory
 
 import scala.jdk.CollectionConverters.*
 
 object TokenizationJob {
+  private val config = ConfigFactory.load()
+  private val modelTypeString = config.getString("tokenization.model-type")
+  private val jobName = config.getString("tokenization.job-name")
+  private val preprocessingRegex = config.getString("tokenization.preprocessing-regex")
+
   private class TokenizationMapper extends Mapper[LongWritable, Text, Text, IntWritable] {
     private lazy val encoding = {
       val registry = Encodings.newDefaultEncodingRegistry()
-      registry.getEncodingForModel(ModelType.TEXT_EMBEDDING_ADA_002)
+      registry.getEncodingForModel(ModelType.valueOf(modelTypeString))
     }
     private val one = new IntWritable(1)
 
     private def preprocess(text: String): String = {
       text.toLowerCase
-        .replaceAll("[^a-z0-9\\s]", "") // Remove all characters except lowercase letters, numbers, and spaces
+        .replaceAll(preprocessingRegex, "") // Remove all characters except lowercase letters, numbers, and spaces
         .split("\\s+") // Split by whitespace
         .mkString(" ") // Join back with single spaces
     }
 
     override def map(key: LongWritable, value: Text, context: Mapper[LongWritable, Text, Text, IntWritable]#Context): Unit = {
-      val text = value.toString.toLowerCase.replaceAll("[^a-z0-9\\s]", "") // Remove all characters except lowercase letters, numbers, and spaces
+      val text = preprocess(value.toString)
       val words = text.split("\\s+") // Split by whitespace
 
       words.foreach { word =>
@@ -49,7 +55,7 @@ object TokenizationJob {
   }
 
   def runJob(conf: Configuration, input: Path, output: Path): Unit = {
-    val job = Job.getInstance(conf, "JTokkit Tokenization")
+    val job = Job.getInstance(conf, jobName)
     job.setJarByClass(this.getClass)
     job.setMapperClass(classOf[TokenizationMapper])
     job.setReducerClass(classOf[TokenizationReducer])
@@ -58,7 +64,7 @@ object TokenizationJob {
     FileInputFormat.addInputPath(job, input)
     FileOutputFormat.setOutputPath(job, output)
 
-//  Delete output path if it exists
+    // Delete output path if it exists
     val fs = FileSystem.get(conf)
     if (fs.exists(output)) {
       fs.delete(output, true)

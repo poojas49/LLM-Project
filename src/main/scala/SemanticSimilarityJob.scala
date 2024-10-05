@@ -5,33 +5,38 @@ import org.apache.hadoop.mapreduce.{Job, Mapper, Reducer}
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
 import org.apache.log4j.Logger
+import com.typesafe.config.ConfigFactory
 
 import scala.jdk.CollectionConverters._
 import scala.collection.mutable
 
 object SemanticSimilarityJob {
   private val logger = Logger.getLogger(getClass)
+  private val config = ConfigFactory.load()
+  private val jobName = config.getString("semantic-similarity.job-name")
+  private val inputSplitDelimiter = config.getString("semantic-similarity.input-split-delimiter")
+  private val embeddingDelimiter = config.getString("semantic-similarity.embedding-delimiter")
+  private val topK = config.getInt("semantic-similarity.top-k")
+  private val similarityFormat = config.getString("semantic-similarity.similarity-format")
 
   class SimilarityMapper extends Mapper[LongWritable, Text, Text, Text] {
     override def map(key: LongWritable, value: Text, context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
-      val parts = value.toString.split("\t")
+      val parts = value.toString.split(inputSplitDelimiter)
       if (parts.length == 2) {
         val token = parts(0)
         val embedding = parts(1)
-        context.write(new Text("all"), new Text(s"$token|$embedding"))
+        context.write(new Text("all"), new Text(s"$token$embeddingDelimiter$embedding"))
       }
     }
   }
 
   class SimilarityReducer extends Reducer[Text, Text, Text, Text] {
-    private val topK = 5 // Number of similar tokens to find
-
     override def reduce(key: Text, values: java.lang.Iterable[Text], context: Reducer[Text, Text, Text, Text]#Context): Unit = {
       val embeddings = mutable.Map[String, Array[Float]]()
 
       // Parse embeddings
       values.asScala.foreach { value =>
-        val parts = value.toString.split("\\|")
+        val parts = value.toString.split(s"\\$embeddingDelimiter")
         if (parts.length == 2) {
           val token = parts(0)
           val embedding = parts(1).stripPrefix("[").stripSuffix("]").split(",").map(_.trim.toFloat)
@@ -46,7 +51,7 @@ object SemanticSimilarityJob {
         }.toSeq.sortBy(-_._2).take(topK)
 
         val similarTokens = similarities.map { case (token, similarity) =>
-          s"$token(${similarity.formatted("%.4f")})"
+          s"$token(${similarity.formatted(similarityFormat)})"
         }.mkString(",")
 
         context.write(new Text(token1), new Text(similarTokens))
@@ -63,7 +68,7 @@ object SemanticSimilarityJob {
   }
 
   def runJob(conf: Configuration, input: Path, output: Path): Unit = {
-    val job = Job.getInstance(conf, "Semantic Similarity")
+    val job = Job.getInstance(conf, jobName)
     job.setJarByClass(this.getClass)
     job.setMapperClass(classOf[SimilarityMapper])
     job.setReducerClass(classOf[SimilarityReducer])
@@ -78,11 +83,11 @@ object SemanticSimilarityJob {
       fs.delete(output, true)
     }
 
-    logger.info(s"Starting Semantic Similarity job with input: $input and output: $output")
+    logger.info(s"Starting $jobName job with input: $input and output: $output")
     if (!job.waitForCompletion(true)) {
-      logger.error("Semantic Similarity job failed")
+      logger.error(s"$jobName job failed")
       System.exit(1)
     }
-    logger.info("Semantic Similarity job completed successfully")
+    logger.info(s"$jobName job completed successfully")
   }
 }
