@@ -40,6 +40,7 @@ The role of each Map reduce job is explained and comments in the code.
 ## Output
 
 The job output will be available in: `/hdfs/output/folder/path`
+The final output file generated is: https://drive.google.com/file/d/1Y-IyzJ1B92Q4soBzN_ccUw5gIQWiAnAr/view?usp=drive_link
 
 ## Troubleshooting
 
