@@ -14,6 +14,7 @@ Then for each Split/Shard of Data it runs the Map reduce jobs which are:
 3. EmbeddingJob
 4. SemanticSimilarityJob
 5. StatisticsCollaterJob
+
 The role of each Map reduce job is explained and comments in the code.
 
 ## Setup
