@@ -3,6 +3,7 @@
 
 ## Videos
 Job Running in Hadoop Pseudo Distributed Mode - https://youtu.be/yr6GhDT-DkY
+
 Job Running in AWS EMR - https://youtu.be/3n63BBl1G-I
 
 # Text Processing Pipeline
@@ -34,12 +35,13 @@ The role of each Map reduce job is explained and comments in the code.
 6. run `start-dfs.sh` - to start data and name nodes
 7. run `start-yarn.sh` - to start resource managers
 8. run `hdfs dfs -mkdir -p input` - to create input folder in hdfs
-9. run `hdfs dfs -put /path/to/input/data/file /hdfs/input/folder/path
+9. run `hdfs dfs -put /path/to/input/data/file /hdfs/input/folder/path`
 10. run `hadoop jar /path/to/fat/jar/file /hdfs/input/folder/path /hdfs/output/folder/path`
 
 ## Output
 
 The job output will be available in: `/hdfs/output/folder/path`
+
 The final output file generated is: https://drive.google.com/file/d/1Y-IyzJ1B92Q4soBzN_ccUw5gIQWiAnAr/view?usp=drive_link
 
 ## Troubleshooting
