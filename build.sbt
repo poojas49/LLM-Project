@@ -12,13 +12,16 @@ lazy val root = (project in file("."))
 libraryDependencies ++= Seq(
   "org.apache.hadoop" % "hadoop-common" % "3.3.6",
   "org.apache.hadoop" % "hadoop-mapreduce-client-core" % "3.3.6",
-  "ch.qos.logback" % "logback-classic" % "1.5.6", // For Logback
+  "ch.qos.logback" % "logback-classic" % "1.2.11", // For Logback
   "org.slf4j" % "slf4j-api" % "2.0.12", // For SLF4J
   "com.typesafe" % "config" % "1.4.3", // For Typesafe Config
   "com.knuddels" % "jtokkit" % "1.1.0",
   "org.deeplearning4j" % "deeplearning4j-core" % "1.0.0-beta7",
   "org.nd4j" % "nd4j-native-platform" % "1.0.0-beta7",
-  "org.yaml" % "snakeyaml" % "2.0"
+  "org.yaml" % "snakeyaml" % "2.0",
+  // Testing libraries
+  "org.scalatest" %% "scalatest" % "3.2.18" % Test,
+  "org.scalatestplus" %% "mockito-3-4" % "3.2.10.0" % Test
 )
 
 assembly / assemblyMergeStrategy := {

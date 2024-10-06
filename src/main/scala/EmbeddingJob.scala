@@ -101,7 +101,7 @@ object EmbeddingJob {
    * 2. Functional Approach: Uses immutable data structures and pure functions for token processing.
    * 3. Averaging: Computes average embeddings for tokens that appear in multiple windows.
    */
-  private class EmbeddingReducer extends Reducer[Text, Text, Text, Text] {
+  class EmbeddingReducer extends Reducer[Text, Text, Text, Text] {
     private val reducerLogger = Logger.getLogger(this.getClass)
     private lazy val model: MultiLayerNetwork = createModel()
 
@@ -182,7 +182,7 @@ object EmbeddingJob {
      * 2. Autoencoder Structure: Implements a simple autoencoder for embedding generation.
      * 3. Adam Optimizer: Efficient and widely used optimizer for neural networks.
      */
-    private def createModel(): MultiLayerNetwork = {
+    def createModel(): MultiLayerNetwork = {
       reducerLogger.info("Creating neural network model")
       val conf = new NeuralNetConfiguration.Builder()
         .updater(new Adam())
@@ -212,7 +212,7 @@ object EmbeddingJob {
      * 1. Conversion: Transforms integer tokens to float for neural network input.
      * 2. Reshaping: Ensures the input is in the correct shape for the network.
      */
-    private def createInputFeature(window: Seq[Int]): INDArray = {
+    def createInputFeature(window: Seq[Int]): INDArray = {
       val floatArray = window.map(_.toFloat).toArray
       val feature = Nd4j.create(floatArray).reshape(1, windowSize)
       reducerLogger.trace(s"Created input feature for window: ${window.mkString(",")}")

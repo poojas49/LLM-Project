@@ -49,7 +49,7 @@ object TokenizationJob {
    *   - Key: Tab-separated word and token (e.g., "hello\t1234")
    *   - Value: Count (always 1 in this case)
    */
-  private class TokenizationMapper extends Mapper[LongWritable, Text, Text, IntWritable] {
+  class TokenizationMapper extends Mapper[LongWritable, Text, Text, IntWritable] {
     private val logger = Logger.getLogger(this.getClass)
 
     // Lazy initialization of the encoding to ensure it's only created when needed
@@ -72,7 +72,7 @@ object TokenizationJob {
      * @param text The input text to preprocess
      * @return The preprocessed text
      */
-    private def preprocess(text: String): String = {
+    def preprocess(text: String): String = {
       logger.debug(s"Preprocessing text: ${text.take(100)}...")
       val result = text.toLowerCase
         .replaceAll(preprocessingRegex, "") // Remove all characters except lowercase letters, numbers, and spaces
@@ -124,7 +124,7 @@ object TokenizationJob {
    * - Aggregation of frequencies provides valuable information for further analysis.
    * - Output format is designed for easy parsing in subsequent pipeline stages.
    */
-  private class TokenizationReducer extends Reducer[Text, IntWritable, Text, Text] {
+  class TokenizationReducer extends Reducer[Text, IntWritable, Text, Text] {
     private val logger = Logger.getLogger(this.getClass)
 
     override def reduce(key: Text, values: java.lang.Iterable[IntWritable], context: Reducer[Text, IntWritable, Text, Text]#Context): Unit = {

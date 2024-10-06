@@ -163,7 +163,7 @@ object StatisticsCollaterJob {
    * 3. Structured Output: Generates a YAML-formatted output for easy parsing and readability.
    * 4. Null Key Output: Allows for sequential, unkeyed output of YAML data.
    */
-  private class StatisticsReducer extends Reducer[Text, Text, Text, Text] {
+  class StatisticsReducer extends Reducer[Text, Text, Text, Text] {
     private val logger = Logger.getLogger(classOf[StatisticsReducer])
 
     override def setup(context: Reducer[Text, Text, Text, Text]#Context): Unit = {

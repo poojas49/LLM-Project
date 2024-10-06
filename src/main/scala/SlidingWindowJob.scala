@@ -56,7 +56,7 @@ object SlidingWindowJob {
    * - Single key output ensures all tokens are processed together in the reducer.
    * - Extracts only the token, discarding word and frequency, as context is built in the reducer.
    */
-  private class SlidingWindowMapper extends Mapper[LongWritable, Text, Text, Text] {
+  class SlidingWindowMapper extends Mapper[LongWritable, Text, Text, Text] {
     private val mapperLogger = Logger.getLogger(this.getClass)
 
     override def map(key: LongWritable, value: Text, context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
@@ -102,7 +102,7 @@ object SlidingWindowJob {
    * - Separate input and label outputs allow for flexible use in various ML tasks.
    * - Index in key maintains order and allows for reconstruction of original sequence if needed.
    */
-  private class SlidingWindowReducer extends Reducer[Text, Text, Text, Text] {
+  class SlidingWindowReducer extends Reducer[Text, Text, Text, Text] {
     private val reducerLogger = Logger.getLogger(this.getClass)
 
     override def reduce(key: Text, values: java.lang.Iterable[Text], context: Reducer[Text, Text, Text, Text]#Context): Unit = {

@@ -59,7 +59,7 @@ object SemanticSimilarityJob {
    * 2. Single Reducer: Uses a constant key to ensure all data is processed together.
    * 3. Error Logging: Logs malformed input for debugging purposes.
    */
-  private class SimilarityMapper extends Mapper[LongWritable, Text, Text, Text] {
+  class SimilarityMapper extends Mapper[LongWritable, Text, Text, Text] {
     private val mapperLogger = Logger.getLogger(this.getClass)
 
     override def setup(context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
@@ -97,7 +97,7 @@ object SemanticSimilarityJob {
    * 2. Functional Approach: Uses immutable data structures and pure functions for clarity and thread-safety.
    * 3. Modular Design: Splits the process into smaller, focused functions for better maintainability.
    */
-  private class SimilarityReducer extends Reducer[Text, Text, Text, Text] {
+  class SimilarityReducer extends Reducer[Text, Text, Text, Text] {
     private val reducerLogger = Logger.getLogger(this.getClass)
 
     override def setup(context: Reducer[Text, Text, Text, Text]#Context): Unit = {
@@ -120,7 +120,7 @@ object SemanticSimilarityJob {
      * @param values Iterable of token-embedding pairs
      * @return Map of tokens to their embeddings
      */
-    private def parseEmbeddings(values: java.lang.Iterable[Text]): Map[String, Array[Float]] = {
+    def parseEmbeddings(values: java.lang.Iterable[Text]): Map[String, Array[Float]] = {
       reducerLogger.debug("Parsing embeddings")
       val embeddings = values.asScala.foldLeft(Map.empty[String, Array[Float]]) { (acc, value) =>
         value.toString.split(s"\\$embeddingDelimiter") match {
@@ -143,7 +143,7 @@ object SemanticSimilarityJob {
      * @param embeddings Map of tokens to their embeddings
      * @return Map of tokens to their top-K similar tokens with similarity scores
      */
-    private def calculateSimilarities(embeddings: Map[String, Array[Float]]): Map[String, Seq[(String, Double)]] = {
+    def calculateSimilarities(embeddings: Map[String, Array[Float]]): Map[String, Seq[(String, Double)]] = {
       reducerLogger.debug("Calculating similarities")
       val similarities = embeddings.map { case (token1, embedding1) =>
         reducerLogger.trace(s"Calculating similarities for token: $token1")
@@ -186,7 +186,7 @@ object SemanticSimilarityJob {
      * 1. Efficiency: Calculates dot product and magnitudes in a single pass.
      * 2. Numerical Stability: Uses separate accumulation for dot product and magnitudes.
      */
-    private def cosineSimilarity(vec1: Array[Float], vec2: Array[Float]): Double = {
+    def cosineSimilarity(vec1: Array[Float], vec2: Array[Float]): Double = {
       require(vec1.length == vec2.length, "Vectors must have the same length")
       val (dotProduct, mag1, mag2) = (vec1 zip vec2).foldLeft((0.0, 0.0, 0.0)) {
         case ((dot, mag1Sq, mag2Sq), (v1, v2)) =>
