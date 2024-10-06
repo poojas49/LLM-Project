@@ -10,8 +10,8 @@ lazy val root = (project in file("."))
   )
 
 libraryDependencies ++= Seq(
-  "org.apache.hadoop" % "hadoop-common" % "3.4.0",
-  "org.apache.hadoop" % "hadoop-mapreduce-client-core" % "3.4.0",
+  "org.apache.hadoop" % "hadoop-common" % "3.3.6",
+  "org.apache.hadoop" % "hadoop-mapreduce-client-core" % "3.3.6",
   "ch.qos.logback" % "logback-classic" % "1.5.6", // For Logback
   "org.slf4j" % "slf4j-api" % "2.0.12", // For SLF4J
   "com.typesafe" % "config" % "1.4.3", // For Typesafe Config
